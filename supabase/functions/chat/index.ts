@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { Command } from "https://deno.land/x/cmd@v1.2.0/mod.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -7,7 +8,6 @@ const corsHeaders = {
 };
 
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
-const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 
 serve(async (req) => {
   // Handle CORS preflight request
@@ -26,42 +26,51 @@ serve(async (req) => {
       throw new Error("No message provided");
     }
 
-    // Call OpenAI API
-    const response = await fetch(OPENAI_API_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
+    // Execute Python handler using Deno's Command API
+    const pythonProcess = new Command("python3", {
+      args: ["handler.py"],
+      env: {
+        OPENAI_API_KEY: OPENAI_API_KEY,
       },
-      body: JSON.stringify({
-        model: "gpt-3.5-turbo",
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are a helpful assistant. Provide concise and accurate responses.",
-          },
-          {
-            role: "user",
-            content: message,
-          },
-        ],
-        max_tokens: 500,
-        temperature: 0.7,
-        user: userId,
-      }),
+      stdin: "piped",
+      stdout: "piped",
+      stderr: "piped",
     });
 
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(`OpenAI API error: ${JSON.stringify(error)}`);
+    // Prepare input for Python script
+    const pythonInput = JSON.stringify({
+      message,
+      userId: userId || "anonymous",
+    });
+
+    // Start the process and write to stdin
+    pythonProcess.start();
+    const writer = pythonProcess.stdin.getWriter();
+    await writer.write(new TextEncoder().encode(pythonInput));
+    await writer.close();
+
+    // Read the output
+    const output = await new Response(pythonProcess.stdout).text();
+    const errorOutput = await new Response(pythonProcess.stderr).text();
+    const status = await pythonProcess.status;
+
+    // Check for errors
+    if (!status.success) {
+      console.error("Python process error:", errorOutput);
+      throw new Error(`Python process failed: ${errorOutput}`);
     }
 
-    const data = await response.json();
-    const aiMessage =
-      data.choices[0]?.message?.content || "No response generated";
+    // Parse the output
+    let result;
+    try {
+      result = JSON.parse(output);
+    } catch (e) {
+      console.error("Failed to parse Python output:", output);
+      throw new Error(`Invalid output from Python: ${output}`);
+    }
 
-    return new Response(JSON.stringify({ message: aiMessage }), {
+    // Return the result
+    return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
       status: 200,
     });
