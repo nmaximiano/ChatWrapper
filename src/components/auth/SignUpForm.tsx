@@ -26,6 +26,7 @@ export default function SignUpForm() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError("");
     try {
       await signUp(email, password, fullName);
       toast({
@@ -34,8 +35,9 @@ export default function SignUpForm() {
         variant: "default",
       });
       navigate("/login");
-    } catch (error) {
-      setError("Error creating account");
+    } catch (error: any) {
+      console.error("Signup error:", error);
+      setError(error?.message || "Error creating account");
     }
   };
 
